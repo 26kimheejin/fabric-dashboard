@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>소재별 판매수량 대시보드</title>
+<script src="lib/xlsx.full.min.js"></script>
+<script src="lib/chart.umd.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Malgun Gothic', sans-serif; background: #f4f6fa; color: #222; }
+  header { background: #1e3a5f; color: #fff; padding: 18px 28px; }
+  header h1 { font-size: 20px; }
+  header p { font-size: 12px; color: #b8c7d9; margin-top: 4px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .card { background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 20px; margin-bottom: 16px; }
+  #dropzone { border: 2px dashed #9db4cc; border-radius: 10px; padding: 34px; text-align: center; color: #567; cursor: pointer; transition: .2s; }
+  #dropzone.drag { background: #e8f0fa; border-color: #1e6ad4; }
+  #dropzone b { color: #1e3a5f; }
+  .filestat { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+  .filestat span { font-size: 13px; padding: 6px 12px; border-radius: 20px; background: #eee; color: #888; }
+  .filestat span.ok { background: #d9f2e3; color: #157347; font-weight: bold; }
+  #runBtn { margin-top: 14px; padding: 10px 34px; font-size: 15px; font-weight: bold; color: #fff; background: #1e6ad4; border: 0; border-radius: 8px; cursor: pointer; }
+  #runBtn:disabled { background: #aac; cursor: not-allowed; }
+  #summary { display: none; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .sumcard { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08); text-align: center; }
+  .sumcard .num { font-size: 22px; font-weight: bold; color: #1e3a5f; margin-top: 6px; }
+  .sumcard .lbl { font-size: 12px; color: #789; }
+  #dash { display: none; }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .tabs { display: flex; gap: 4px; }
+  .tabs button { padding: 8px 16px; border: 1px solid #cdd8e4; background: #fff; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  .tabs button.on { background: #1e3a5f; color: #fff; border-color: #1e3a5f; font-weight: bold; }
+  select { padding: 8px 10px; border: 1px solid #cdd8e4; border-radius: 8px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #eef2f7; padding: 8px; text-align: left; border-bottom: 2px solid #d5dfe9; white-space: nowrap; }
+  td { padding: 7px 8px; border-bottom: 1px solid #eef0f4; }
+  td.r, th.r { text-align: right; }
+  tr.stylerow { cursor: pointer; }
+  tr.stylerow:hover { background: #f2f7fd; }
+  tr.fabricdetail td { background: #f8fafc; font-size: 12px; color: #556; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #e8f0fa; color: #1e6ad4; margin-right: 4px; }
+  .miss { color: #c33; font-size: 12px; }
+  h2 { font-size: 15px; color: #1e3a5f; margin-bottom: 12px; }
+  #chartwrap { position: relative; width: 100%; }
+  .note { font-size: 12px; color: #889; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>소재별 판매수량 대시보드</h1>
+  <p>매주 월요일: BI 파일 + 발주장부를 넣으면, 누적정판율 상위 스타일의 소재별 원단발주수량(M)을 자동 집계합니다. 데이터는 이 컴퓨터 안에서만 처리됩니다.</p>
+</header>
+<main>
+  <div class="card">
+    <div id="dropzone">
+      <b>여기에 파일 2개를 끌어다 놓거나 클릭해서 선택하세요</b><br>
+      <span style="font-size:13px">① BI 다운로드 파일 (스타일별판매재고_*.xlsx) &nbsp;&nbsp;② 발주장부 (★발주장부통합★_*.xlsx)</span>
+      <input type="file" id="fileInput" multiple accept=".xlsx,.xlsm" style="display:none">
+      <div class="filestat">
+        <span id="stBI">① BI 판매파일: 대기</span>
+        <span id="stLG">② 발주장부: 대기</span>
+      </div>
+      <div><button id="runBtn" disabled>분석하기</button></div>
+    </div>
+  </div>
+
+  <div id="summary" style="margin-bottom:16px">
+    <div class="sumcard"><div class="lbl">BI 조회 기간</div><div class="num" id="sumPeriod" style="font-size:14px">-</div></div>
+    <div class="sumcard"><div class="lbl">상위 스타일 (누적정판율)</div><div class="num" id="sumTop">-</div></div>
+    <div class="sumcard"><div class="lbl">발주장부 매칭 성공</div><div class="num" id="sumMatch">-</div></div>
+    <div class="sumcard"><div class="lbl">겉감 원단 수량 합계</div><div class="num" id="sumQty">-</div></div>
+  </div>
+
+  <div id="dash">
+    <div class="card">
+      <div class="toolbar">
+        <div class="tabs" id="axisTabs">
+          <button data-axis="item" class="on">소재 Item NO.별</button>
+          <button data-axis="vendor">원단업체별</button>
+          <button data-axis="blend">혼용률별</button>
+          <button data-axis="brand">브랜드별</button>
+        </div>
+        <select id="brandFilter"><option value="">전체 (군/브랜드)</option></select>
+        <select id="topN">
+          <option value="30" selected>상위 30개 스타일</option>
+          <option value="50">상위 50개 스타일</option>
+          <option value="100">상위 100개 스타일</option>
+        </select>
+      </div>
+      <div id="chartwrap"><canvas id="chart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2 id="rankTitle">소재별 누적 발주수량 순위</h2>
+      <table id="rankTable"><thead></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <h2>잘 팔리는 스타일 목록 (누적정판율 순) — 행을 클릭하면 원단 내역이 펼쳐집니다</h2>
+      <table id="styleTable">
+        <thead><tr><th>#</th><th>스타일코드</th><th>스타일명</th><th>계절</th><th class="r">누적정판율</th><th class="r">누적판매량</th><th>매칭 소재(겉감)</th><th class="r">수량(M)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="note" id="missNote"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── 브랜드 매핑 (군 → 브랜드 → BR코드) ──
+const BRAND_MAP = [
+  ["여성","멜본","ST"],["여성","보에띠","BO"],["여성","CMCUBE","CM"],["여성","모스코나","MO"],
+  ["여성","오스본","OS"],["여성","타마라","TA"],["여성","튜브","TU"],["여성","트렌드컬렉션","TR"],
+  ["여성","이즈멜본","SU"],["여성","데이텀","DA"],["여성","제이빔","JV"],["여성","알토","AL"],
+  ["라이프","신디","CD"],["라이프","애니바디","AN"],["라이프","란찌","LA"],["라이프","엠아이슈트","TT"],
+  ["라이프","NC베이직","NC"],["라이프","유솔","UL"],["라이프","인디고키즈","IK"],
+  ["아동","로엠걸즈","RG"],["아동","밀리밤","ML"],["아동","치크","CK"],["아동","앙떼떼","AT"],
+  ["아동","더데이걸","TG"],["아동","일로딜로","ID"],["아동","신디키즈","CI"],["아동","리틀브렌","LB"],
+];
+const BR_TO_NAME = {}, BR_TO_GROUP = {};
+BRAND_MAP.forEach(([g,n,c]) => { BR_TO_NAME[c] = n; BR_TO_GROUP[c] = g; });
+
+// ── 상태 ──
+let biWB = null, lgWB = null, biFileName = "";
+let biStyles = [];      // {code,name,season,rate,salesQty}
+let ledgerIndex = {};   // styleCode -> [ledger row objects]
+let result = null;      // 분석 결과
+
+const $ = id => document.getElementById(id);
+
+// ── 파일 입력 ──
+const dz = $("dropzone"), fi = $("fileInput");
+dz.addEventListener("click", e => { if (e.target.id !== "runBtn") fi.click(); });
+dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("drag"); });
+dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+dz.addEventListener("drop", e => { e.preventDefault(); dz.classList.remove("drag"); handleFiles(e.dataTransfer.files); });
+fi.addEventListener("change", () => handleFiles(fi.files));
+
+function ingestWorkbook(buf, name) {
+  const wb = XLSX.read(buf, { type: "array" });
+  if (wb.SheetNames.includes("스타일별판매재고")) {
+    biWB = wb; biFileName = name;
+    $("stBI").textContent = "① BI 판매파일: " + name; $("stBI").classList.add("ok");
+  } else if (wb.SheetNames.some(s => /^20\d\d$/.test(s))) {
+    lgWB = wb;
+    $("stLG").textContent = "② 발주장부: " + name; $("stLG").classList.add("ok");
+  } else {
+    alert(name + " — 어떤 파일인지 인식하지 못했습니다.\nBI 파일에는 '스타일별판매재고' 시트, 발주장부에는 '2025'/'2026' 시트가 있어야 합니다.");
+  }
+  $("runBtn").disabled = !(biWB && lgWB);
+}
+
+function handleFiles(files) {
+  [...files].forEach(f => {
+    const reader = new FileReader();
+    reader.onload = ev => ingestWorkbook(ev.target.result, f.name);
+    reader.readAsArrayBuffer(f);
+  });
+}
+
+// 개발 검증용: ?test=1 이면 data/ 폴더의 샘플 파일을 자동 로드 후 분석
+if (new URLSearchParams(location.search).has("test")) {
+  (async () => {
+    for (const u of ["data/bi.xlsx", "data/ledger.xlsx"]) {
+      const buf = await (await fetch(u)).arrayBuffer();
+      ingestWorkbook(buf, u);
+    }
+    $("runBtn").click();
+    console.log("TESTMODE done");
+  })();
+}
+
+// ── 파싱 ──
+const norm = v => String(v == null ? "" : v).replace(/[\s\n\r]/g, "");
+
+function parseBI() {
+  const ws = biWB.Sheets["스타일별판매재고"];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+  // 헤더 이름으로 컬럼 위치를 자동 인식 (BI 양식이 조금 바뀌어도 동작)
+  let styleCol = -1, yearCol = -1, seasonCol = -1, rateCol = -1, salesCol = -1, headerRow = -1, period = "";
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const r = rows[i]; if (!r) continue;
+    r.forEach((c, j) => {
+      const t = norm(c);
+      if (t.startsWith("조회(일)") && r[j + 1]) period = String(r[j + 1]);
+      if (t.includes("스타일코드")) { styleCol = j; headerRow = i; }
+      if (t.includes("계절연도")) yearCol = j;
+      else if (t.startsWith("계절(")) seasonCol = j;
+      if (t.includes("누적입고대비정판율")) rateCol = j;
+      if (t === "누적판매량") salesCol = j;
+    });
+  }
+  if (styleCol < 0 || rateCol < 0) {
+    alert("BI 파일에서 '스타일코드' 또는 '누적입고대비정판율' 컬럼을 찾지 못했습니다. 파일 양식을 확인해 주세요.");
+    return { styles: [], period };
+  }
+  const styles = [];
+  for (let i = headerRow + 1; i < rows.length; i++) {
+    const r = rows[i]; if (!r) continue;
+    const code = String(r[styleCol] || "").trim();
+    const name = String(r[styleCol + 1] || "").trim();
+    // 스타일코드가 있고, "결과" 소계 행이 아니고, 스타일명이 있는 행만
+    if (!code || code.includes("결과") || !name) continue;
+    let rate = r[rateCol];
+    if (typeof rate === "string") rate = parseFloat(rate.replace(/[%,\s]/g, ""));
+    if (rate == null || isNaN(rate)) continue;
+    styles.push({
+      code, name,
+      season: String(r[yearCol] || "") + " " + String(r[seasonCol + 1] || r[seasonCol] || ""),
+      rate,
+      salesQty: salesCol >= 0 ? toNum(r[salesCol]) : 0,
+    });
+  }
+  // 정판율이 소수(0.591)로 저장된 경우 %로 환산
+  const maxRate = Math.max(...styles.map(s => s.rate));
+  if (maxRate <= 5) styles.forEach(s => s.rate = s.rate * 100);
+  return { styles, period };
+}
+
+function toNum(v) {
+  if (typeof v === "number") return v;
+  if (v == null) return 0;
+  const n = parseFloat(String(v).replace(/[,\s]/g, ""));
+  return isNaN(n) ? 0 : n;
+}
+
+function parseLedger() {
+  const idx = {};
+  lgWB.SheetNames.filter(s => /^20\d\d$/.test(s)).forEach(sn => {
+    const rows = XLSX.utils.sheet_to_json(lgWB.Sheets[sn], { header: 1, raw: true });
+    // 'STYLE NO.' 헤더 위치로 열 밀림을 자동 보정 (기준: 12번째 열)
+    let off = 0, hdrFound = false;
+    for (let i = 0; i < Math.min(rows.length, 5) && !hdrFound; i++) {
+      (rows[i] || []).forEach((c, j) => {
+        if (norm(c).toUpperCase().includes("STYLENO")) { off = j - 11; hdrFound = true; }
+      });
+    }
+    for (let i = 2; i < rows.length; i++) { // 3행부터 데이터 (2행이 헤더)
+      const r0 = rows[i]; if (!r0) continue;
+      const r = off === 0 ? r0 : (off > 0 ? r0.slice(off) : Array(-off).fill(undefined).concat(r0));
+      const styleRaw = String(r[11] || "").trim();
+      if (!styleRaw) continue;
+      const row = {
+        year: sn,
+        season: String(r[3] || "").trim(),
+        br: String(r[5] || "").trim().toUpperCase(),
+        itemCode: String(r[8] || "").trim(),
+        part: String(r[10] || "").trim(),      // 부위 (겉감/안감…)
+        styleRaw,
+        vendor: String(r[13] || "").trim(),
+        fabric: String(r[15] || "").trim(),    // 원단 Item NO.
+        fabric2: String(r[16] || "").trim(),
+        blend: String(r[17] || "").trim(),     // 혼용률
+        color: String(r[19] || "").trim(),
+        qty: toNum(r[20]),                     // 원단발주수량(M)
+      };
+      // STYLE NO. 파싱: "새번호 <= 옛번호" → 두 번호 모두 색인 (왼쪽=새 번호)
+      styleRaw.split(/<=|⇐/).map(t => t.trim().replace(/\s+/g, "")).filter(Boolean).forEach(code => {
+        const key = code.toUpperCase();
+        (idx[key] = idx[key] || []).push(row);
+      });
+    }
+  });
+  return idx;
+}
+
+// ── 분석 ──
+$("runBtn").addEventListener("click", () => {
+  const bi = parseBI();
+  biStyles = bi.styles.sort((a, b) => b.rate - a.rate);
+  ledgerIndex = parseLedger();
+  buildBrandFilter();
+  $("sumPeriod").textContent = bi.period || biFileName;
+  render();
+  $("summary").style.display = "grid";
+  $("dash").style.display = "block";
+  window.scrollTo({ top: $("summary").offsetTop - 10, behavior: "smooth" });
+});
+
+function analyze(topN, brandSel) {
+  // 발주장부에 있는 스타일만 대상으로 정판율 상위 N개 선정 (없는 스타일은 건너뜀)
+  const top = [];
+  let skipped = 0;
+  for (const s of biStyles) {
+    if (top.length >= topN) break;
+    if (ledgerIndex[s.code.toUpperCase()]) top.push(s); else skipped++;
+  }
+  const matched = [], missed = [];
+  top.forEach(s => {
+    let rows = ledgerIndex[s.code.toUpperCase()] || [];
+    // 겉감만
+    let outer = rows.filter(r => r.part.startsWith("겉"));
+    // 군/브랜드 필터
+    if (brandSel) {
+      if (brandSel.startsWith("G:")) { const g = brandSel.slice(2); outer = outer.filter(r => BR_TO_GROUP[r.br] === g); }
+      else outer = outer.filter(r => r.br === brandSel);
+    }
+    if (rows.length === 0) missed.push(s);
+    matched.push({ ...s, fabrics: outer, qty: outer.reduce((a, r) => a + r.qty, 0), inLedger: rows.length > 0 });
+  });
+  return { top, matched, missed, skipped };
+}
+
+function aggregate(matched, axis) {
+  const map = {};
+  matched.forEach(s => s.fabrics.forEach(r => {
+    let key;
+    if (axis === "item") key = r.fabric || r.fabric2 || "(소재 미입력)";
+    else if (axis === "vendor") key = r.vendor || "(업체 미입력)";
+    else if (axis === "blend") key = r.blend || "(혼용률 미입력)";
+    else key = BR_TO_NAME[r.br] ? BR_TO_NAME[r.br] + " (" + r.br + ")" : (r.br || "(브랜드 미입력)");
+    const m = (map[key] = map[key] || { qty: 0, styles: new Set(), rows: 0 });
+    m.qty += r.qty; m.styles.add(s.code); m.rows++;
+  }));
+  return Object.entries(map).map(([k, v]) => ({ key: k, qty: v.qty, styleCnt: v.styles.size, rows: v.rows }))
+    .sort((a, b) => b.qty - a.qty);
+}
+
+// ── 화면 ──
+let chart = null;
+const AXIS_LABEL = { item: "소재 Item NO.", vendor: "원단업체", blend: "혼용률", brand: "브랜드" };
+let curAxis = "item";
+
+$("axisTabs").addEventListener("click", e => {
+  if (e.target.tagName !== "BUTTON") return;
+  curAxis = e.target.dataset.axis;
+  [...$("axisTabs").children].forEach(b => b.classList.toggle("on", b === e.target));
+  render();
+});
+$("brandFilter").addEventListener("change", render);
+$("topN").addEventListener("change", render);
+
+function buildBrandFilter() {
+  const sel = $("brandFilter");
+  sel.innerHTML = '<option value="">전체 (군/브랜드)</option>';
+  ["여성", "라이프", "아동"].forEach(g => {
+    const og = document.createElement("optgroup"); og.label = "── " + g + " ──";
+    const optG = document.createElement("option"); optG.value = "G:" + g; optG.textContent = g + " 전체";
+    og.appendChild(optG);
+    BRAND_MAP.filter(b => b[0] === g).forEach(([_, n, c]) => {
+      const o = document.createElement("option"); o.value = c; o.textContent = n + " (" + c + ")";
+      og.appendChild(o);
+    });
+    sel.appendChild(og);
+  });
+}
+
+function fmt(n) { return Math.round(n).toLocaleString(); }
+
+function render() {
+  const topN = parseInt($("topN").value);
+  const brandSel = $("brandFilter").value;
+  result = analyze(topN, brandSel);
+  const agg = aggregate(result.matched, curAxis);
+  const totQty = agg.reduce((a, x) => a + x.qty, 0);
+  const matchCnt = result.matched.filter(s => s.inLedger).length;
+
+  $("sumTop").textContent = topN + "개";
+  $("sumMatch").textContent = matchCnt + " / " + topN;
+  $("sumQty").textContent = fmt(totQty) + " M";
+
+  // 차트 (상위 20)
+  const cd = agg.slice(0, 20);
+  $("chartwrap").style.height = Math.max(120, cd.length * 26 + 60) + "px";
+  if (chart) chart.destroy();
+  chart = new Chart($("chart"), {
+    type: "bar",
+    data: { labels: cd.map(x => x.key), datasets: [{ label: "누적 발주수량(M)", data: cd.map(x => Math.round(x.qty)), backgroundColor: "#1e6ad4" }] },
+    options: { indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, title: { display: true, text: AXIS_LABEL[curAxis] + "별 누적 발주수량(M) — 상위 " + cd.length } },
+      scales: { x: { ticks: { callback: v => v.toLocaleString() } } } }
+  });
+
+  // 순위표
+  $("rankTitle").textContent = AXIS_LABEL[curAxis] + "별 누적 발주수량 순위" + (brandSel ? " (필터 적용됨)" : "");
+  $("rankTable").querySelector("thead").innerHTML =
+    "<tr><th>#</th><th>" + AXIS_LABEL[curAxis] + "</th><th class='r'>스타일 수</th><th class='r'>발주 건수</th><th class='r'>누적 수량(M)</th><th class='r'>비중</th></tr>";
+  $("rankTable").querySelector("tbody").innerHTML = agg.map((x, i) =>
+    "<tr><td>" + (i + 1) + "</td><td>" + esc(x.key) + "</td><td class='r'>" + x.styleCnt + "</td><td class='r'>" + x.rows +
+    "</td><td class='r'><b>" + fmt(x.qty) + "</b></td><td class='r'>" + (totQty ? (x.qty / totQty * 100).toFixed(1) : 0) + "%</td></tr>").join("");
+
+  // 스타일 목록
+  const tb = $("styleTable").querySelector("tbody");
+  tb.innerHTML = "";
+  result.matched.forEach((s, i) => {
+    const tr = document.createElement("tr");
+    tr.className = "stylerow";
+    const fabricsTxt = s.inLedger
+      ? (s.fabrics.length ? [...new Set(s.fabrics.map(r => r.fabric || r.fabric2 || "(미입력)"))].map(f => "<span class='badge'>" + esc(f) + "</span>").join("")
+        : "<span class='miss'>겉감 없음" + (brandSel ? "/필터 제외" : "") + "</span>")
+      : "<span class='miss'>발주장부에 없음 → 제외</span>";
+    tr.innerHTML = "<td>" + (i + 1) + "</td><td><b>" + esc(s.code) + "</b></td><td>" + esc(s.name) + "</td><td>" + esc(s.season) +
+      "</td><td class='r'>" + s.rate.toFixed(1) + "%</td><td class='r'>" + fmt(s.salesQty) + "</td><td>" + fabricsTxt +
+      "</td><td class='r'>" + (s.fabrics.length ? fmt(s.qty) : "-") + "</td>";
+    tb.appendChild(tr);
+    if (s.fabrics.length) {
+      const dt = document.createElement("tr");
+      dt.className = "fabricdetail"; dt.style.display = "none";
+      dt.innerHTML = "<td></td><td colspan='7'><table>" +
+        "<tr><th>연도</th><th>브랜드</th><th>부위</th><th>원단업체</th><th>소재 Item NO.</th><th>혼용률</th><th>COLOR</th><th class='r'>수량(M)</th></tr>" +
+        s.fabrics.map(r => "<tr><td>" + r.year + "</td><td>" + esc(BR_TO_NAME[r.br] || r.br) + "</td><td>" + esc(r.part) + "</td><td>" + esc(r.vendor) +
+          "</td><td>" + esc(r.fabric || r.fabric2) + "</td><td>" + esc(r.blend) + "</td><td>" + esc(r.color) + "</td><td class='r'>" + fmt(r.qty) + "</td></tr>").join("") +
+        "</table></td>";
+      tb.appendChild(dt);
+      tr.addEventListener("click", () => { dt.style.display = dt.style.display === "none" ? "" : "none"; });
+    }
+  });
+  $("missNote").textContent = result.skipped
+    ? "※ 발주장부에 있는 스타일만 순위에 포함합니다. 정판율이 더 높지만 발주장부에 없어 건너뛴 스타일: " + result.skipped + "개 (니트·모자 등 원단 발주 대상이 아닌 스타일)"
+    : "";
+}
+
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+</script>
+</body>
+</html>
